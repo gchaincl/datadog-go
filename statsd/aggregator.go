@@ -8,23 +8,27 @@ import (
 )
 
 type (
-	countsMap map[string]*countMetric
-	gaugesMap map[string]*gaugeMetric
-	setsMap   map[string]*setMetric
+	countsMap    map[string]*countMetric
+	gaugesMap    map[string]*gaugeMetric
+	setsMap      map[string]*setMetric
+	histogramMap map[string]*histogramMetric
 )
 
 type aggregator struct {
-	nbContextGauge int32
-	nbContextCount int32
-	nbContextSet   int32
+	nbContextGauge     int32
+	nbContextCount     int32
+	nbContextSet       int32
+	nbContextHistogram int32
 
-	countsM sync.RWMutex
-	gaugesM sync.RWMutex
-	setsM   sync.RWMutex
+	countsM     sync.RWMutex
+	gaugesM     sync.RWMutex
+	setsM       sync.RWMutex
+	histogramsM sync.RWMutex
 
-	gauges gaugesMap
-	counts countsMap
-	sets   setsMap
+	gauges     gaugesMap
+	counts     countsMap
+	sets       setsMap
+	histograms histogramMap
 
 	closed chan struct{}
 	exited chan struct{}
@@ -33,20 +37,22 @@ type aggregator struct {
 }
 
 type aggregatorMetrics struct {
-	nbContext      int32
-	nbContextGauge int32
-	nbContextCount int32
-	nbContextSet   int32
+	nbContext          int32
+	nbContextGauge     int32
+	nbContextCount     int32
+	nbContextSet       int32
+	nbContextHistogram int32
 }
 
 func newAggregator(c *Client) *aggregator {
 	return &aggregator{
-		client: c,
-		counts: countsMap{},
-		gauges: gaugesMap{},
-		sets:   setsMap{},
-		closed: make(chan struct{}),
-		exited: make(chan struct{}),
+		client:     c,
+		counts:     countsMap{},
+		gauges:     gaugesMap{},
+		sets:       setsMap{},
+		histograms: histogramMap{},
+		closed:     make(chan struct{}),
+		exited:     make(chan struct{}),
 	}
 }
 
@@ -84,12 +90,13 @@ func (a *aggregator) flushTelemetryMetrics() *aggregatorMetrics {
 	}
 
 	am := &aggregatorMetrics{
-		nbContextGauge: atomic.SwapInt32(&a.nbContextGauge, 0),
-		nbContextCount: atomic.SwapInt32(&a.nbContextCount, 0),
-		nbContextSet:   atomic.SwapInt32(&a.nbContextSet, 0),
+		nbContextGauge:     atomic.SwapInt32(&a.nbContextGauge, 0),
+		nbContextCount:     atomic.SwapInt32(&a.nbContextCount, 0),
+		nbContextSet:       atomic.SwapInt32(&a.nbContextSet, 0),
+		nbContextHistogram: atomic.SwapInt32(&a.nbContextHistogram, 0),
 	}
 
-	am.nbContext = am.nbContextGauge + am.nbContextCount + am.nbContextSet
+	am.nbContext = am.nbContextGauge + am.nbContextCount + am.nbContextSet + am.nbContextHistogram
 	return am
 }
 
@@ -126,14 +133,29 @@ func (a *aggregator) flushMetrics() []metric {
 		metrics = append(metrics, c.flushUnsafe())
 	}
 
+	a.histogramsM.Lock()
+	histograms := a.histograms
+	a.histograms = histogramMap{}
+	a.histogramsM.Unlock()
+
+	for _, h := range histograms {
+		metrics = append(metrics, h.flushUnsafe())
+	}
+
 	atomic.AddInt32(&a.nbContextCount, int32(len(counts)))
 	atomic.AddInt32(&a.nbContextGauge, int32(len(gauges)))
 	atomic.AddInt32(&a.nbContextSet, int32(len(sets)))
+	atomic.AddInt32(&a.nbContextHistogram, int32(len(histograms)))
 	return metrics
 }
 
 func getContext(name string, tags []string) string {
-	return name + ":" + strings.Join(tags, ",")
+	return name + ":" + strings.Join(tags, tagSeparatorSymbol)
+}
+
+func getContextAndTags(name string, tags []string) (string, string) {
+	stringTags := strings.Join(tags, tagSeparatorSymbol)
+	return name + ":" + stringTags, stringTags
 }
 
 func (a *aggregator) count(name string, value int64, tags []string) error {
@@ -183,5 +205,21 @@ func (a *aggregator) set(name string, value string, tags []string) error {
 	a.setsM.Lock()
 	a.sets[context] = newSetMetric(name, value, tags)
 	a.setsM.Unlock()
+	return nil
+}
+
+func (a *aggregator) histogram(name string, value float64, tags []string) error {
+	context, stringTags := getContextAndTags(name, tags)
+	a.histogramsM.RLock()
+	if histogram, found := a.histograms[context]; found {
+		histogram.sample(value)
+		a.histogramsM.RUnlock()
+		return nil
+	}
+	a.histogramsM.RUnlock()
+
+	a.histogramsM.Lock()
+	a.histograms[context] = newHistogramMetric(name, value, stringTags)
+	a.histogramsM.Unlock()
 	return nil
 }

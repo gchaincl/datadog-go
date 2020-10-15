@@ -83,6 +83,29 @@ func (w *worker) writeMetricUnsafe(m metric) error {
 		return w.buffer.writeEvent(*m.evalue, m.globalTags)
 	case serviceCheck:
 		return w.buffer.writeServiceCheck(*m.scvalue, m.globalTags)
+	case histogramAggregated:
+		globalPos := 0
+
+		// first check how much data we can write to the buffer +4 because of
+		// the the message will include '|h|#' before the tags and +1 for the
+		// coma between the two set of tags
+		tagsSize := len(m.stags) + 5
+		for _, t := range m.globalTags {
+			tagsSize += len(t) + 1
+		}
+
+		for {
+			pos, err := w.buffer.writeHistogramAggregated(m.namespace, m.globalTags, m.name, m.fvalues[globalPos:], m.stags, tagsSize)
+			if err == errPartialWrite {
+				// We successfully wrote part of the histogram metrics.
+				// We flush the current buffer and finish the histogram
+				// in a new one.
+				w.flushUnsafe()
+				globalPos += pos
+			} else {
+				return err
+			}
+		}
 	default:
 		return nil
 	}

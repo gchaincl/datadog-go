@@ -117,3 +117,37 @@ func (s *setMetric) flushUnsafe() []metric {
 	}
 	return metrics
 }
+
+// Histograms
+type histogramMetric struct {
+	data []float64
+	name string
+	// Histograms store tags as one string since we need to compute its
+	// size multiple time whe serializing.
+	tags string
+	sync.Mutex
+}
+
+func newHistogramMetric(name string, value float64, stringTags string) *histogramMetric {
+	return &histogramMetric{
+		data: []float64{value},
+		name: name,
+		tags: stringTags,
+	}
+}
+
+func (s *histogramMetric) sample(v float64) {
+	s.Lock()
+	defer s.Unlock()
+	s.data = append(s.data, v)
+}
+
+func (s *histogramMetric) flushUnsafe() metric {
+	return metric{
+		metricType: histogramAggregated,
+		name:       s.name,
+		stags:      s.tags,
+		rate:       1,
+		fvalues:    s.data,
+	}
+}
