@@ -147,7 +147,7 @@ func TestTelemetryWithAggregation(t *testing.T) {
 	telemetry := newTelemetryClient(client, "test_transport", false)
 
 	expectedMetrics := map[string]int64{
-		"datadog.dogstatsd.client.aggregated_context": 5,
+		"datadog.dogstatsd.client.aggregated_context": 6,
 	}
 	for k, v := range basicExpectedMetrics {
 		expectedMetrics[k] = v
@@ -164,7 +164,7 @@ func TestTelemetryWithAggregationDevMode(t *testing.T) {
 	telemetry := newTelemetryClient(client, "test_transport", true)
 
 	expectedMetrics := map[string]int64{
-		"datadog.dogstatsd.client.aggregated_context": 5,
+		"datadog.dogstatsd.client.aggregated_context": 6,
 	}
 	for k, v := range basicExpectedMetrics {
 		expectedMetrics[k] = v
